@@ -5,6 +5,25 @@ Cloud Sync utility to synchronize files in a collaborative fashion to amazon's S
 
 lsync has the concept of a "file repository" which is associated (via a config file) with a specific bucket on Amazon's S3. The root of the file repository is indicated by a ".lsync" directory that contains the lsync configuration and a basic (yaml-based) file database.
 
+Getting Started:
+=====
+
+Set up your S3 storage, buckets and then your AWS secret keys for 'boto' python module, either in /etc/boto.cfg or as environment variables:
+
+    AWS_ACCESS_KEY_ID - Your AWS Access Key ID
+    AWS_SECRET_ACCESS_KEY - Your AWS Secret Access Key
+
+See this page for more information: http://boto.readthedocs.org/en/latest/s3_tut.html
+    
+Create a new directory, and initialise the lsync repository
+
+    $ mkdir mystuff && cd mystuff
+    $ lsync init my_bucket .
+    $ touch some_new_file
+    $ lsync sync
+    
+The 'sync' action should synchronise your empty file to the remote 'my_bucket' bucket.
+
 Usage:
 =====
 
@@ -57,9 +76,12 @@ Roadmap
 - Add support for nested repositories
 - Add support for detection of moved files, and perform server/client side moves
 - Add support for removing empty directories (locally and remotely)
+- Add 'lsync resolve' action
+- Add support for GoogleStore
 
 Known Issues:
 -----
+- Only Amazon S3 is supported at the moment
 - CTRL+C interruption of download just as file finished but before the file was written into 
   local repo config will cause a file to have downloaded with lsync 'knowing' about it. Not entirely
   critical but may lead unexpected behaviour during local/remote file deletion attempts.
