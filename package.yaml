@@ -10,13 +10,12 @@ authors:
 - vanaarde
 
 description: >
- Enter description here. Multiline is ok, but make sure that you 
- leave the single leading space on each line, as shown here.
+  lsync is a collaborative cloud storage synchronisation utility
 
 requires:
 - python
 
-help: firefox file://!ROOT!/doc/html/index.html
+help: $BROWSER file://!ROOT!/doc/html/index.html
 
 tools:
 - lsync

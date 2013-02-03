@@ -11,6 +11,7 @@ from optparse import OptionParser
 import time
 import datetime
 
+import lsync
 import lsync.repository
 import lsync.storage
 
@@ -362,94 +363,6 @@ def rm_action(argv):
 
 ###################################################################################################
 
-def _pull_files(repo_obj, bucket_obj, from_path=None):
-	"""
-	Pull files from the given store object into the given directory
-
-	@repo_obj Object representing the local file repository
-	@bucket_obj Object representing remote bucket
-	"""
-	# remote_path = bucket_cache.bucket_name()
-	# repo_path = bucket_cache.repo_path()
-
-	# Find all the files on the remote side, and parse the output from gsutil
-	print "retrieving files from server..."
-	remote_files = bucket_obj.ls();
-	for f in remote_files:
-		print f, remote_files[f]
-	
-	print "done."
-
-	print "collecting local file list..."
-	# Build a list of all the local files with timestamps and sizes
-	local_files = repo_obj.ls()
-	for f in local_files:
-		print f, local_files[f]
-
-	print "done."
-
-	return
-
-	# Find files that exists locally (on disk and in cache), but not remotely, and remove them.
-	remotely_deleted_files = []
-	for f in local_files:
-		fdata = local_files
-		if f not in remote_files and bucket_cache.has_file(f):
-			# If the file on disk's time stamp matches the cache timestamp, delete it.
-			# If it is newer than the cache entry, remove the outdated cache entry.
-			cfile = bucket_cache.get_file(f)
-			if fdata[1] > cfile[1]:
-				# The file on disk is newer than the cached entry. Don't delete the
-				# local file, but remove the cached entry immediately
-				bucket_cache.remove_files([f]);
-			else:
-				# This file should be deleted
-				remotely_deleted_files.append(f)
-
-	# For each remote file, check whether we have a local copy. If we don't, copy the file over.
-	# If we do, check whether the local file is older. If it is, copy the remote file locally.
-
-	downloaded_files = {}
-	for remote_file in remote_files:
-		rfile = remote_files[remote_file]
-		if remote_file in dest_files:
-			# Check the time difference between the remote and local file
-			lfile = dest_files[remote_file]
-			print rfile[1], " ---- ", lfile[1]
-			if rfile[1] > dest_files[remote_file][1]:
-				print "remote file is strictly newer. download file", rfile[1], lfile[1]
-				pass
-				
-			else:
-				print "local file up to date. skipping", remote_file
-				continue;
-		# else:
-			# print "new remote file. download file"
-
-		# Download the remote file
-		print "[downloading] [%d KB] %s ..." % (rfile[2]/1024, remote_file)
-		store_obj.download(remote_file);
-		# if returncode != 0:
-		# 	raise Exception("File download failed with returncode: %d" % returncode)
-		
-		
-		#Register the file after download
-		bucket_cache.register_file(rfile[0], rfile[1], rfile[2])
-		# Queue the downloaded file for registration
-		# downloaded_files[remote_file] = remote_files[remote_file]
-		
-
-	# Delete local files, and remove them from the cache
-	for f in remotely_deleted_files:
-		print "delete file: ", f
-		repo.rm(f)
-		bucket_cache.remove_files([f])
-
-	# Register the downloaded files in the lsync bucket cache
-	# bucket_cache.register_files(downloaded_files)
-
-###################################################################################################
-
 def _push_files(store_obj, bucket_cache):
 	"""
 	Push files from the local path to the remote location
@@ -463,7 +376,6 @@ def _push_files(store_obj, bucket_cache):
 
 	print "retrieving files from server..."
 	remote_files = store_obj.ls("/");
-	# remote_files = extract_files_from_gsutil_output(flist)
 	print "done."
 
 	repo = LocalRepo(repo_path)
@@ -589,12 +501,9 @@ def pull_action(argv):
 	"""
 	Pull all bucket files from the server
 	"""
-	print "pull action...", argv
-
-	usage = "usage: %prog pull [path]" # [from_path]"
+	usage = "usage: %prog pull [repo_path]" # [path]"
 	parser = OptionParser(usage);
 	options, args = parser.parse_args(argv);
-	print args
 
 	if len(args) not in [0,1]:
 		parser.error("Incorrect number of arguments");
@@ -604,10 +513,10 @@ def pull_action(argv):
 		repo_path = args[0]
 
 	repo = lsync.repository.Repository(repo_path)
-	print "Using repo: ", repo.get_root()
+	print "Repository: ", repo.get_root()
 	bucket = lsync.storage.Bucket( repo.get_bucket_name() )
 	
-	_pull_files(repo, bucket)
+	lsync.pull_files(repo, bucket)
 
 ###################################################################################################
 
@@ -615,25 +524,23 @@ def push_action(argv):
 	"""
 	Push local files to the bucket on the server
 	"""
-	print "push action...", argv
-
-	usage = "usage: %prog push repo_name"
-	# TODO: Change usage to:
-	# usage = "usage: %prog push bucket_name [path]" < -- required 'lsync init' command to be implemented
+	usage = "usage: %prog push [repo_path]" # [path]"
 	parser = OptionParser(usage);
 	options, args = parser.parse_args(argv);
-	print args
 
-	if len(args) != 1:
+	if len(args) not in [0,1]:
 		parser.error("Incorrect number of arguments");
 
-	repo_name = args[0]
+	repo_path = "."
+	if len(args) == 1:
+		repo_path = args[0]
 
-	bcache = BucketCache(repo_name);
-	gs = BucketStore( bcache.bucket_name() );
+	repo = lsync.repository.Repository(repo_path)
+	print "Repository: ", repo.get_root()
+	bucket = lsync.storage.Bucket( repo.get_bucket_name() )
 	
 	# _pull_files(gs, bcache)
-	_push_files(gs, bcache)
+	lsync.push_files(repo, bucket)
 
 ###################################################################################################
 
@@ -648,7 +555,6 @@ def init_action(argv):
 	parser.add_option("-w", "--overwrite", dest="overwrite", \
 		action="store_true", default=False, help="overwrite existing repo config", metavar="FILE")
 	options, args = parser.parse_args(argv);
-	print args
 
 	if len(args) != 2:
 		parser.error("Incorrect number of arguments");
@@ -664,6 +570,7 @@ def init_action(argv):
 action_dict = {}
 action_dict["init"] = init_action
 action_dict["pull"] = pull_action
+action_dict["push"] = push_action
 
 # action_dict["rm"] = rm_action
 # action_dict["sync"] = sync_action

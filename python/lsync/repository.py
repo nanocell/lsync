@@ -1,5 +1,6 @@
 import os
 import yaml
+import copy
 
 import storage
 import utils
@@ -18,7 +19,6 @@ def find_repository_root(start_path):
 	"""
 	Search for the the .lsync/config file up the directory tree
 	"""
-	print "locating from: ", start_path
 	cur_path = os.path.abspath(start_path)
 	while not os.path.isfile( _build_config_filepath(cur_path) ):
 		if len(cur_path) <= 1:
@@ -52,7 +52,7 @@ def create_repository(repo_path, bucket_name, overwrite=False):
 	"""
 	Create a new repository configuration. Cannot nest repositories
 	"""
-	cfg_path = _locate_config(repo_path);
+	cfg_path = find_repository_root(repo_path);
 	if cfg_path == repo_path:
 		if not overwrite:
 			raise Exception("Cannot create repository here. One exists here already.")
@@ -80,7 +80,6 @@ class Repository:
 		@repo_path Any path inside the repo. It will automatically locate the root
 		"""
 		self._root = None
-		print "finding repo path: ", repo_path
 		root = find_repository_root(repo_path)
 		self._root = os.path.abspath(root);
 		self._cfg = None
@@ -92,8 +91,7 @@ class Repository:
 		"""
 		Make sure the config is written to disk upon repo destruction
 		"""
-		# self._write_config();
-		pass
+		self._write_config();
 
 	###############################################################################################
 
@@ -164,8 +162,12 @@ class Repository:
 		"""
 		Set properties of the given file in the repo cache
 		"""
-		lsync.utils.set_timestamp_on_file(filename, timestamp)
-		self._cfg["files"][filename] = [timestamp, filesize, md5]
+		# Due to a bug in PYYAML, we cannot serialise/deserialise time-zone aware timecodes
+		# correctly. Save them as a string instead.
+		abs_file = os.path.abspath( os.path.join(self._root, filename) );
+		utils.set_timestamp_on_file(abs_file, timestamp)
+		str_timestamp = str(timestamp)
+		self._cfg["files"][filename] = [str_timestamp, filesize, md5]
 
 	###############################################################################################
 
@@ -174,8 +176,28 @@ class Repository:
 		@return tuple (filename, timestamp, filesize)
 		"""
 		d = self._cfg["files"].get(filename)
+		
+		# Parse the 'string' time-zone aware date.
 		if d:
-			return (filename, d[0], d[1])
+			d = copy.copy(d)
+			d[0] = utils.parse_iso_date(d[0]);
+			return d
+		else:
+			return None
+		# if d:
+		# 	# return (filename, d[0], d[1])
+		# 	return d
+		# return None
+
+	###############################################################################################
+
+	def remove_file_properties(self, filename):
+		"""
+		Remove the given file's properties from the repository cache
+		"""
+		d = self._cfg["files"].get(filename)
+		if d is not None:
+			del self._cfg["files"][filename];
 
 	###############################################################################################
 
@@ -191,21 +213,13 @@ class Repository:
 				if fname.startswith("./"):
 					fname = fname.split("./",1)[1]
 				fname = self.get_file_in_repository(fname)
+				full_path = os.path.join(self.get_root(), fname)
 				if fname.startswith(".lsync"):
 					continue;
-				t = utils.get_timestamp_from_file(fname)
-				fs = utils.get_filesize_from_file(fname)
+				t = utils.get_timestamp_from_file(full_path)
+				fs = utils.get_filesize_from_file(full_path)
 				file_dict[fname] = (t, fs, None)
 		return file_dict
-
-	###############################################################################################
-
-	def remove_local_file(self, filename):
-		"""
-		Remove a local file from the repo
-		"""
-		pass
-
 
 	###############################################################################################
 
@@ -220,17 +234,14 @@ class Repository:
 
 	###############################################################################################
 
-	def remove_file(self, filename, remote=True, local=True):
+	def remove_file(self, filename):
 		"""
-		Remove a file locally and remotely (as specified)
+		Remove a file from the local repository
 		"""
-		pass
-
-	###############################################################################################
-
-	def download_file(self, filename):
-		"""
-		"""
+		fname = self.get_file_in_repository(filename)
+		full_path = os.path.join(self.get_root(), fname)
+		os.remove(full_path)
+		self.remove_file_properties(fname)
 		pass
 
 	###############################################################################################

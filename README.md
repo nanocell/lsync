@@ -53,4 +53,13 @@ Roadmap
 -----
 
 - Finish implementation of behaviour documented above
+- Add support for resume-able uploads/downloads
 - Add support for nested repositories
+- Add support for detection of moved files, and perform server/client side moves
+- Add support for removing empty directories (locally and remotely)
+
+Known Issues:
+-----
+- CTRL+C interruption of download just as file finished but before the file was written into 
+  local repo config will cause a file to have downloaded with lsync 'knowing' about it. Not entirely
+  critical but may lead unexpected behaviour during local/remote file deletion attempts.

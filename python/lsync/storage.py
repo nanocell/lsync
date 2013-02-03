@@ -1,6 +1,7 @@
 
+import os
+import sys
 import utils
-
 import boto.s3.connection
 
 class Bucket:
@@ -50,7 +51,13 @@ class Bucket:
 
 	###############################################################################################
 
-	def upload(self, source_file):
+	def remove_file(self, remote_file):
+		self._bucket.delete_key(remote_file)
+		
+
+	###############################################################################################
+
+	def upload(self, local_file, remote_file, verbose=True):
 		"""
 		Upload a file into the current bucket
 		@return some relevent file properties
@@ -62,39 +69,61 @@ class Bucket:
 			global i
 			i = (i + 1) % len(ctr)
 			c = ctr[i]
-			pct = (uploaded/float(total_size))*100
+			if total_size == 0:
+				pct = 100
+			else:
+				pct = (uploaded/float(total_size))*100
 			sys.stdout.write( "\r-> %d / %d (%d%s) %s" % (uploaded, total_size, pct, "%", c) )
 			sys.stdout.flush()
 			
-		dst_uri = boto.storage_uri(self._bucket_name + "/" + source_file, BucketStore.STORAGE)
+		dst_uri = boto.storage_uri(self._bucket_name + "/" + remote_file, Bucket.STORAGE)
 		
-		print "uploading to: ", dst_uri
-		f = file(source_file, "r")
-		key = self._bucket.new_key(source_file)
+		if not verbose:
+			callback = None
+
+		f = file(local_file, "r")
+		key = self._bucket.new_key(remote_file)
 		key.set_contents_from_file(f, cb=callback)
 		f.close()
-		print "done.", dst_uri.bucket_name, dst_uri.object_name
-
+		print ""
 		return [key.last_modified, key.size, key.etag]
 
 	###############################################################################################
 
-	def download(self, remote_file, local_file, set_timestamp=True):
+	def download(self, remote_file, local_file, set_timestamp=True, verbose=True):
 		"""
 		Download a file from the bucket to the given local file path, and
 		@return some relevent file properties
 		"""		
-		print ("downloading: %s" % (remote_file))
+		global i
+		ctr = ["-", "\\", "|", "/"]
+		i = 0
+		def callback(uploaded, total_size):
+			global i
+			i = (i + 1) % len(ctr)
+			c = ctr[i]
+			if total_size == 0:
+				pct = 100
+			else:
+				pct = (uploaded/float(total_size))*100
+			sys.stdout.write( "\r <- [%d KB] %d / %d (%d%s) %s" % (total_size/1024, uploaded, total_size, pct, "%", c) )
+			sys.stdout.flush()
+
+		if not verbose:
+			callback = None
 
 		path, filen = os.path.split(local_file)
 		if not os.path.exists(path) and len(path.strip()) > 0:
 			os.makedirs(path);
 
 		key = self._bucket.get_key(remote_file)
-		key.get_contents_to_filename(local_file);
+		key.get_contents_to_filename(local_file, cb=callback);
+		print ""
 
 		if set_timestamp:
-			modified_date = lsync.utils.parse_iso_date(key.last_modified)
-			lsync.utils.set_timestamp_on_file(source_file, modified_date)
+			modified_date = utils.parse_iso_date(key.last_modified)
+			utils.set_timestamp_on_file(local_file, modified_date)
 
 		return [key.last_modified, key.size, key.md5]
+
+	###############################################################################################
