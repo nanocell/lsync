@@ -40,35 +40,41 @@ def pull_files(repo_obj, bucket_obj, verbose=False):
 	# Step 1: Remove remotely deleted files
 	# Find files that exists locally (on disk and in cache), but not remotely, and remove them.
 	print "======================================================="
-	print " Step 1: Remove remotely deleted files "
+	print " [pull] Remove remotely deleted files "
 	print "======================================================="
 	remotely_deleted_files = []
-	for f in local_files:
+	for f in sorted(local_files):
 		lfile = local_files[f]
-		if f not in remote_files and f in local_files:
+		cfile = repo_obj.get_file_properties(f)
+		if cfile and f not in remote_files and f in local_files:
 			# If we have a file in the local repo, and in the repo cache (meaning it was transfered
 			# at some point) but it is not present remotely anymore, it implies the files has been
 			# remotely deleted. Therefor, delete it locally.
 
 			# If the file on disk's time stamp matches the cache timestamp, delete it.
 			# If it is newer than the cache entry, remove the outdated cache entry.
-			cfile = repo_obj.get_file_properties(f)
-			if cfile is None:
-				# We have a local file with the same name as a remote file, but wasn't 
-				# recorded as being downloaded with lsync. Generate conflict here
-				raise NotImplementedError("Conflict between local and remote file: %s" % (f))
+			
+			# if cfile is None:
+			# 	# We have a local file with the same name as a remote file, but wasn't 
+			# 	# recorded as being downloaded with lsync. Generate conflict here
+			# 	raise NotImplementedError("Conflict between local and remote file: %s" % (f))
+			# else:
+			if lfile[0] > cfile[0]:
+				# The file on disk is newer than the cached entry. Don't delete the
+				# local file, but remove the cached entry immediately
+				if verbose: 
+					print "Removing cached entry for file: ", f
+				repo_obj.remove_files([f]);
 			else:
-				if lfile[0] > cfile[0]:
-					# The file on disk is newer than the cached entry. Don't delete the
-					# local file, but remove the cached entry immediately
-					if verbose: 
-						print "Removing cached entry for file: ", f
-					repo_obj.remove_files([f]);
-				else:
-					# This file should be deleted
-					if verbose: 
-						print "Appending file for deletion: ", f
-					remotely_deleted_files.append(f)
+				# This file should be deleted
+				if verbose: 
+					print "Appending file for deletion: ", f
+				remotely_deleted_files.append(f)
+		elif cfile is None and f in remote_files and f in local_files:
+			# We have a local file with the same name as a remote file, but wasn't 
+			# recorded as being downloaded with lsync. Generate conflict here
+			raise NotImplementedError("Conflict between local and remote file: %s" % (f))
+
 
 	# Delete remotely-removed files, and remove them from the cache
 	for f in remotely_deleted_files:
@@ -76,14 +82,14 @@ def pull_files(repo_obj, bucket_obj, verbose=False):
 		repo_obj.remove_file(f)
 
 	print "======================================================="
-	print " Step 2: Download new/updated files"
+	print " [pull] Download new/updated files"
 	print "======================================================="
 	
 	# Step 2: Download new / remotely updated files
 	# For each remote file, check whether we have a local copy. If we don't, copy the file over.
 	# If we do, check whether the local file is older. If it is, copy the remote file locally.
 	downloaded_files = {}
-	for remote_file in remote_files:
+	for remote_file in sorted(remote_files):
 		rfile = remote_files[remote_file]
 		if remote_file in local_files:
 			# Check the time difference between the remote and local file
@@ -135,10 +141,10 @@ def push_files(repo_obj, bucket_obj, verbose=False):
 		print "done."
 
 	print "======================================================="
-	print " Remove remote files"
+	print " [push] Remove remote files"
 	print "======================================================="
 	# Step 1: Determine which remote files should be removed
-	for f in remote_files:
+	for f in sorted(remote_files):
 		# Find remote files that is present in the repo cache, but not on disk
 		file_properties = repo_obj.get_file_properties(f)
 		if file_properties and f not in local_files:
@@ -150,10 +156,10 @@ def push_files(repo_obj, bucket_obj, verbose=False):
 			
 
 	print "======================================================="
-	print " Upload local files "
+	print " [push] Upload local files "
 	print "======================================================="
 	# Step 2: Determine which local files should be uploaded
-	for f in local_files:
+	for f in sorted(local_files):
 		lfile = local_files.get(f)
 		rfile = remote_files.get(f)
 		cfile = repo_obj.get_file_properties(f);
@@ -196,5 +202,17 @@ def push_files(repo_obj, bucket_obj, verbose=False):
 		bucket_obj.upload(full_path, relname)
 		#Register uploaded files immediately with the local repository
 		repo_obj.set_file_properties( f, lfile[0], lfile[1], lfile[2] )
+
+###################################################################################################
+
+def sync_files(repo_obj, bucket_obj, verbose=False):
+	"""
+	Sync files between local repository and remote bucket by performing a pull, followed by a push.
+
+	@repo_obj Instance of repository.Repository class
+	@bucket_obj Instance of storage.Bucket class
+	"""
+	pull_files(repo_obj, bucket_obj)
+	push_files(repo_obj, bucket_obj)
 
 ###################################################################################################
