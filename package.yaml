@@ -1,0 +1,27 @@
+config_version : 0
+
+name: lsync
+
+version: 0.0.0
+
+uuid: 25ac67cf-1b0f-47e8-8d84-9216b38a1436
+
+authors:
+- vanaarde
+
+description: >
+ Enter description here. Multiline is ok, but make sure that you 
+ leave the single leading space on each line, as shown here.
+
+requires:
+- python
+
+help: firefox file://!ROOT!/doc/html/index.html
+
+tools:
+- lsync
+
+commands:
+- export PATH=$PATH:!ROOT!/bin
+- export PYTHONPATH=$PYTHONPATH:!ROOT!/python
+
