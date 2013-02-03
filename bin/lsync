@@ -1,0 +1,700 @@
+#!/usr/bin/env python2.7
+"""
+lsync - cLoud Sync
+"""
+
+import sys
+import os
+import subprocess
+import yaml
+from optparse import OptionParser
+import time
+import datetime
+
+import lsync.repository
+import lsync.storage
+
+#dateutil (3rdparty)
+import dateutil.parser
+import dateutil.tz
+
+# import boto (3rdparty)
+from boto.s3.connection import S3Connection
+import boto
+import boto.utils
+
+APPID="lsync"
+
+"""
+The intent behind this commandline application is to provide similar syncronization behaviour to 
+that of DropBox with the exception that you are not limited to a single file repository. You can 
+set up multiple local repositories (analogous to git repositories) and have each of those sync to 
+the same, or to different remote S3 buckets.
+
+Example usage:
+NOTE: You have to run cmdline lsync from within a local repo
+
+Sync the full repo
+$ lsync sync
+
+Sync files recursively starting from the current directory
+$ lsync sync .
+
+Sync a list of files
+$ lsync sync foo1 foo2 foo3 [...]
+
+The above sync behaviour applies to 'push' and 'pull' actions too
+Pull changes from the remote to the local repository
+$ lsync pull 
+
+Push changes from the local to the remote repository
+$ lsync push
+
+"""
+
+###################################################################################################
+
+class LocalRepo:
+	def __init__(self, root):
+		self._root = root;
+
+	@staticmethod
+	def find_config(start_path):
+		"""
+		Search for an lsync config file up to root. If found, return 
+		"""
+
+
+	@staticmethod
+	def create_repo(bucket_name, repo_path):
+		"""
+		Initialise a new repo with a bucket_name and a root path
+		"""
+		if not os.path.exists(repo_path):
+			raise Exception("Given repo path does not exist: %s" % repo_path)
+		os.path.mkdir( os.path.join(repo_path), ".lsync" )
+
+
+	def rm(self, filename):
+		"""
+		Remove the given file. This file MUST be contained in the repo
+		"""
+		abs_root = os.path.abspath(self._root)
+		abs_file = os.path.abspath( os.path.join(self._root, filename) );
+		if abs_file.startswith(abs_root):
+			os.remove(abs_file);
+		else:
+			raise Exception("Cannot remove file [%s] outside repo [%s]" % (filename, self._root))
+
+###################################################################################################
+
+class BucketCache:
+	VERSION = 0
+
+	###############################################################################################
+	
+	def __init__(self, repo_name):
+		self._repo_name = repo_name
+		self._cache_filepath = BucketCache._get_config_path(repo_name)
+
+		self._cache = None;
+		self._read_bucket_cache() # Init self._cache
+
+	###############################################################################################
+
+	def __enter__(self):
+		return self
+
+	###############################################################################################
+
+	def __del__(self):
+		# Write the cache to disk
+		self._write_bucket_cache();
+
+	###############################################################################################
+
+	@staticmethod
+	def _get_config_path(repo_name):
+		return encode_cfg_path("%s.cache.yaml" % repo_name);
+
+	###############################################################################################
+
+	@staticmethod
+	def init_repo(repo_name, bucket_name, repo_path, force=False):
+		"""
+		Initialise the given repository with the bucket name, and repo path
+		"""
+		cache_filepath = BucketCache._get_config_path(repo_name);
+		if os.path.exists(cache_filepath) and not force:
+			raise Exception("Repo already exists!")
+		touch(cache_filepath);
+		d = {}
+		d["files"] = {}
+		d["version"] = BucketCache.VERSION
+		d["bucket_name"] = bucket_name
+		d["repo_path"] = repo_path
+		f = open(cache_filepath, "w")
+		f.write(yaml.dump(d, default_flow_style=False))
+		f.close()
+
+		return BucketCache(repo_name)
+
+	###############################################################################################
+
+	def bucket_name(self):
+		return self._cache["bucket_name"];
+
+	###############################################################################################
+
+	def repo_path(self):
+		return self._cache["repo_path"];
+
+	###############################################################################################
+
+	def get_cache_filepath(self):
+		return self._cache_filepath;
+
+	###############################################################################################
+
+	def _read_bucket_cache(self):
+		"""
+		Get the data associated with the registered files for the given bucket
+		"""
+		# Retrieve the cache file that corresponds to this bucket
+		cache_filepath = self.get_cache_filepath()
+		if not os.path.exists(cache_filepath):
+			raise Exception("Repository does not exist: %s" % self._repo_name)
+		
+		print "[cache read] started...", cache_filepath
+		f = open(cache_filepath, "r")
+		self._cache = yaml.load(f)
+		f.close()
+		
+		v = self._cache.get("version")
+		if v != BucketCache.VERSION:
+			raise Exception("Expected BucketCache version [%s] but found [%s]." % \
+				(BucketCache.version, v))
+
+		print "[cache read] done"
+
+	###############################################################################################
+
+	def _write_bucket_cache(self):
+		"""
+		Writes the given data into the specified bucket cache
+		"""
+		# Retrieve the cache file that corresponds to this bucket
+		cache_filepath = self.get_cache_filepath()
+		if not os.path.exists(cache_filepath):
+			raise Exception("Repository does not exist: %s" % self._repo_name)
+
+		print "[cache write] started...", cache_filepath
+		f = open(cache_filepath, "w")
+		f.write(yaml.dump(self._cache, default_flow_style=False));
+		f.close()
+		print "[cache write] done"
+
+	###############################################################################################
+
+	def register_file(self, filename, timestamp, filesize):
+		"""
+		Register files, relative to the root of the data repository and store it in 
+		a local config file. This is file that lsync 'knows' about so that it can track
+		whether the user has deleted files locally, or whether files have been deleted
+		from the server.
+		NOTE: The registered file has to be stored with a timestamp to allows us to properly
+		control the deletion of local / server side files, i.e., determine that a local
+		file has been deleted and the file on the server has not been updated, and consequently
+		delete the remote copy.
+		@files dict of tuples: fname => (fname, timestamp, fsize)
+		"""
+		d = self._cache.get("files")
+		d[filename] = [filename, timestamp, filesize]		
+		self._cache["files"] = d
+
+	###############################################################################################
+
+	def remove_files(self, files):
+		"""
+		Remove the cache entries for the given files
+		"""
+		for f in files:
+			print ("Removing cache entries: %s" % files)
+			del self._cache["files"][f]
+
+	###############################################################################################
+
+	def get_file(self, file):
+		"""
+		Return the cached data for the given file. None if not found
+		"""
+		return self._cache["files"].get(file)
+
+	###############################################################################################
+
+	def has_file(self, file):
+		if self._cache["files"].has_key(file):
+			return True;
+		return False;
+
+###################################################################################################
+
+def _run_cmd(cmd, shell=True):
+	"""
+	Runs the given shell command and captures the output.
+	@param cmd Command to execute by Popen
+	@param shell Whether the command should be run as a shell command
+	@returns return code, and output
+	"""
+	p = subprocess.Popen(cmd, shell=shell, stdout=subprocess.PIPE);
+	output = p.communicate()[0]
+	return p.returncode, output
+
+###################################################################################################
+
+class BucketStore:
+	STORAGE = "s3"
+	PROTOCOL = STORAGE + "://"	
+	def __init__(self, bucket_name, debug=False):
+		self._conn = S3Connection()
+		self._debug = debug
+		self._bucket_name = bucket_name
+		self._bucket = self._conn.get_bucket(bucket_name)
+		
+		# if self._bucket_name.startswith(GoogleStore.PROTOCOL):
+		# 	# Ensure the _bucket_name doesn't contain the PROTOCOL
+		# 	self._bucket_name = self._bucket_name.split(GoogleStore.PROTOCOL, 1)[1];
+
+		# if not bucket_name.startswith(GoogleStore.PROTOCOL):
+		# 	# Ensure sure the bucket starts with the PROTOCOL gs://
+		# 	self._bucket = "%s%s" % (GoogleStore.PROTOCOL, bucket_name)
+		# else: 
+		# 	self._bucket = bucket_name
+
+	def bucket_name(self):
+		return self._bucket_name
+
+	def _fix_gs_filepath(self, filen):
+		"""
+		If the given filename does not start with the protocol/bucket string,
+		append it.
+		"""
+		if filen.startswith(self._bucket):
+			return filen;
+		else:
+			return os.path.join(self._bucket, filen.lstrip('/'));
+
+	# def ls(self, remote_path=""):
+	# 	ls_path = self._fix_gs_filepath(remote_path)
+	# 	returncode, files = _run_cmd("gsutil ls -l -r %s" % ls_path)
+	# 	if returncode != 0:
+	# 		raise Exception("Error accessing (ls) remote path: %s" % (ls_path))
+	# 	return files
+
+	def ls(self, remote_path=""):
+		"""
+		Return dict of files, keyed by filename, that maps to additional properties
+		"""
+		results = {}
+		for key in self._bucket.list():
+			fdate = _parse_iso_date(key.last_modified)
+			results[key.name] = [key.name, fdate, key.size]
+		return results
+
+	def upload(self, source_file):
+		"""
+		Upload a file into the current bucket
+		"""
+		global i
+		ctr = ["-", "\\", "|", "/"]
+		i = 0
+		def callback(uploaded, total_size):
+			global i
+			i = (i + 1) % len(ctr)
+			c = ctr[i]
+			pct = (uploaded/float(total_size))*100
+			sys.stdout.write( "\r-> %d / %d (%d%s) %s" % (uploaded, total_size, pct, "%", c) )
+			sys.stdout.flush()
+			
+		# dest_file = self._fix_gs_filepath(dest_file)
+		dst_uri = boto.storage_uri(self._bucket_name + "/" + source_file, BucketStore.STORAGE)
+		if self._debug:
+			print ("[gs] uploading: %s -> %s" % (source_file, dst_uri))
+		
+		print "uploading to: ", dst_uri
+		f = file(source_file, "r")
+		key = self._bucket.new_key(source_file)
+		key.set_contents_from_file(f, cb=callback)
+		f.close()
+		print "done.", dst_uri.bucket_name, dst_uri.object_name
+
+
+
+	def download(self, source_file):
+		"""
+		Upload a file into the current bucket
+		"""
+		
+		if self._debug:
+			print ("[gs] downloading: %s" % (source_file))
+
+		path, filen = os.path.split(source_file)
+		if not os.path.exists(path) and len(path.strip()) > 0:
+			os.makedirs(path);
+		# f = file(source_file, "w")
+		# src_uri.new_key().get_file(f)
+		# f.close()
+		key = self._bucket.get_key(source_file)
+		key.get_contents_to_filename(source_file);
+		_set_timestamp_on_file(source_file, _parse_iso_date(key.last_modified))
+		print "done", key.last_modified
+		#returncode, _ = _run_cmd("gsutil cp \"%s\" \"%s\"" % (source_file, dest_file))
+		# return returncode
+
+###################################################################################################
+
+def rm_action(argv):
+	"""
+	Remove a file locally and from the server. 
+	"""
+	print "rm action...", argv
+	pass
+
+###################################################################################################
+
+def _pull_files(repo_obj, bucket_obj, from_path=None):
+	"""
+	Pull files from the given store object into the given directory
+
+	@repo_obj Object representing the local file repository
+	@bucket_obj Object representing remote bucket
+	"""
+	# remote_path = bucket_cache.bucket_name()
+	# repo_path = bucket_cache.repo_path()
+
+	# Find all the files on the remote side, and parse the output from gsutil
+	print "retrieving files from server..."
+	remote_files = bucket_obj.ls();
+	for f in remote_files:
+		print f, remote_files[f]
+	
+	print "done."
+
+	print "collecting local file list..."
+	# Build a list of all the local files with timestamps and sizes
+	local_files = repo_obj.ls()
+	for f in local_files:
+		print f, local_files[f]
+
+	print "done."
+
+	return
+
+	# Find files that exists locally (on disk and in cache), but not remotely, and remove them.
+	remotely_deleted_files = []
+	for f in local_files:
+		fdata = local_files
+		if f not in remote_files and bucket_cache.has_file(f):
+			# If the file on disk's time stamp matches the cache timestamp, delete it.
+			# If it is newer than the cache entry, remove the outdated cache entry.
+			cfile = bucket_cache.get_file(f)
+			if fdata[1] > cfile[1]:
+				# The file on disk is newer than the cached entry. Don't delete the
+				# local file, but remove the cached entry immediately
+				bucket_cache.remove_files([f]);
+			else:
+				# This file should be deleted
+				remotely_deleted_files.append(f)
+
+	# For each remote file, check whether we have a local copy. If we don't, copy the file over.
+	# If we do, check whether the local file is older. If it is, copy the remote file locally.
+
+	downloaded_files = {}
+	for remote_file in remote_files:
+		rfile = remote_files[remote_file]
+		if remote_file in dest_files:
+			# Check the time difference between the remote and local file
+			lfile = dest_files[remote_file]
+			print rfile[1], " ---- ", lfile[1]
+			if rfile[1] > dest_files[remote_file][1]:
+				print "remote file is strictly newer. download file", rfile[1], lfile[1]
+				pass
+				
+			else:
+				print "local file up to date. skipping", remote_file
+				continue;
+		# else:
+			# print "new remote file. download file"
+
+		# Download the remote file
+		print "[downloading] [%d KB] %s ..." % (rfile[2]/1024, remote_file)
+		store_obj.download(remote_file);
+		# if returncode != 0:
+		# 	raise Exception("File download failed with returncode: %d" % returncode)
+		
+		
+		#Register the file after download
+		bucket_cache.register_file(rfile[0], rfile[1], rfile[2])
+		# Queue the downloaded file for registration
+		# downloaded_files[remote_file] = remote_files[remote_file]
+		
+
+	# Delete local files, and remove them from the cache
+	for f in remotely_deleted_files:
+		print "delete file: ", f
+		repo.rm(f)
+		bucket_cache.remove_files([f])
+
+	# Register the downloaded files in the lsync bucket cache
+	# bucket_cache.register_files(downloaded_files)
+
+###################################################################################################
+
+def _push_files(store_obj, bucket_cache):
+	"""
+	Push files from the local path to the remote location
+
+	@store_obj Store from which the files should be retrieved
+	@remote_path Retrieve all files recursively start at the given remote path
+	@dest Destination for the store
+	"""
+	remote_path = bucket_cache.bucket_name()
+	repo_path = bucket_cache.repo_path()
+
+	print "retrieving files from server..."
+	remote_files = store_obj.ls("/");
+	# remote_files = extract_files_from_gsutil_output(flist)
+	print "done."
+
+	repo = LocalRepo(repo_path)
+
+	# Build a list of all the local files with timestamps and sizes
+	print "collecting local file list..."
+	dest_files = repo.collect_files()
+	local_files = dest_files;
+	print "done."
+
+	for f in local_files:
+		lfile = local_files.get(f)
+		rfile = remote_files.get(f)
+		cfile = bucket_cache.get_file(f);
+		if rfile is not None:
+			# If the remote file is newer, don't push
+			print "push times: ", rfile[1], lfile[1]
+			if rfile[1] > lfile[1]:
+				print "Remote file is strictly newer than local file. Skipping %s" % f
+				continue
+
+			if rfile[1] == lfile[1]:
+				print "Remote file is up to date (==). Skipping %s" % f
+				continue
+
+			if cfile and lfile[1] > cfile[1] and rfile[1] > cfile[1]:
+				print "Conflict between local and remote file. Skipping: %s" % f
+				print "Fix with 'lsync resolve' command"
+				continue
+
+		# At this point, the local file is ready to be uploaded:
+		print "uploading: %s" % (f)
+		if rfile:
+			print "server time: ", rfile[1]
+		print "local time: ", lfile[1]
+		store_obj.upload(f)
+		#Register uploaded files immediately
+		bucket_cache.register_file( lfile[0], lfile[1], lfile[2] )
+
+
+###################################################################################################
+
+def sync_action(argv):
+	"""
+	Sync data to and from the server.
+	"""
+	print "sync action...", argv
+
+	usage = "usage: %prog sync source_dir bucket_name"
+	parser = OptionParser(usage);
+	# parser.add_option("-m", "--lua-moai", dest="luamoaifile", help="write Moai Lua datafile", metavar="FILE")
+	# parser.add_option("-l", "--lua-loons", dest="lualoonsfile", help="write Loons Lua datafile", metavar="FILE")
+	# parser.add_option("-r", "--lua-rapanui", dest="luarapanuifile", help="write Rapanui Lua datafile", metavar="FILE")
+	# parser.add_option("-y", "--yaml", dest="yamlfile", help="write Yaml datafile", metavar="FILE")
+	options, args = parser.parse_args(argv);
+	print args
+
+	if len(args) != 2:
+		parser.error("Incorrect number of arguments");
+
+	source_dir = args[0]
+	bucket_name = args[1]
+
+	gs = BucketStore(bucket_name);
+
+	remote_files = gs.ls();
+
+###################################################################################################
+
+def upload_action(argv):
+	"""
+	Upload a file from the server
+	"""
+	print "upload action...", argv
+
+	usage = "usage: %prog upload source_file remote_file"
+	parser = OptionParser(usage);
+	# parser.add_option("-m", "--lua-moai", dest="luamoaifile", help="write Moai Lua datafile", metavar="FILE")
+	# parser.add_option("-l", "--lua-loons", dest="lualoonsfile", help="write Loons Lua datafile", metavar="FILE")
+	# parser.add_option("-r", "--lua-rapanui", dest="luarapanuifile", help="write Rapanui Lua datafile", metavar="FILE")
+	# parser.add_option("-y", "--yaml", dest="yamlfile", help="write Yaml datafile", metavar="FILE")
+	options, args = parser.parse_args(argv);
+	print args
+
+	if len(args) != 2:
+		parser.error("Incorrect number of arguments");
+
+	source_file = args[0]
+	bucket_name, remote_file = args[1].split("/",1)
+
+	gs = BucketStore(bucket_name);
+	gs.upload(source_file, remote_file);
+
+###################################################################################################
+
+def download_action(argv):
+	"""
+	Download a file from the server
+	"""
+	print "download action...", argv
+
+	usage = "usage: %prog download remote_file dest_file"
+	parser = OptionParser(usage);
+	# parser.add_option("-m", "--lua-moai", dest="luamoaifile", help="write Moai Lua datafile", metavar="FILE")
+	# parser.add_option("-l", "--lua-loons", dest="lualoonsfile", help="write Loons Lua datafile", metavar="FILE")
+	# parser.add_option("-r", "--lua-rapanui", dest="luarapanuifile", help="write Rapanui Lua datafile", metavar="FILE")
+	# parser.add_option("-y", "--yaml", dest="yamlfile", help="write Yaml datafile", metavar="FILE")
+	options, args = parser.parse_args(argv);
+	print args
+
+	if len(args) != 3:
+		parser.error("Incorrect number of arguments");
+
+	bucket_name, remote_path = args[0].split(os.pathsep,1)	
+	dest_file = args[1]
+
+	gs = BucketStore(bucket_name);
+	gs.download(source_file, dest_file);
+
+###################################################################################################
+
+def pull_action(argv):
+	"""
+	Pull all bucket files from the server
+	"""
+	print "pull action...", argv
+
+	usage = "usage: %prog pull [path]" # [from_path]"
+	parser = OptionParser(usage);
+	options, args = parser.parse_args(argv);
+	print args
+
+	if len(args) not in [0,1]:
+		parser.error("Incorrect number of arguments");
+
+	repo_path = "."
+	if len(args) == 1:
+		repo_path = args[0]
+
+	repo = lsync.repository.Repository(repo_path)
+	print "Using repo: ", repo.get_root()
+	bucket = lsync.storage.Bucket( repo.get_bucket_name() )
+	
+	_pull_files(repo, bucket)
+
+###################################################################################################
+
+def push_action(argv):
+	"""
+	Push local files to the bucket on the server
+	"""
+	print "push action...", argv
+
+	usage = "usage: %prog push repo_name"
+	# TODO: Change usage to:
+	# usage = "usage: %prog push bucket_name [path]" < -- required 'lsync init' command to be implemented
+	parser = OptionParser(usage);
+	options, args = parser.parse_args(argv);
+	print args
+
+	if len(args) != 1:
+		parser.error("Incorrect number of arguments");
+
+	repo_name = args[0]
+
+	bcache = BucketCache(repo_name);
+	gs = BucketStore( bcache.bucket_name() );
+	
+	# _pull_files(gs, bcache)
+	_push_files(gs, bcache)
+
+###################################################################################################
+
+def init_action(argv):
+	"""
+	Initialise a repo for lsync, and create the respective bucket on BucketStore
+	"""
+	usage = "usage: %prog init bucket_name repo_path"
+	# TODO: Change usage to:
+	# usage = "usage: %prog push bucket_name [path]" < -- required 'lsync init' command to be implemented
+	parser = OptionParser(usage);
+	parser.add_option("-w", "--overwrite", dest="overwrite", \
+		action="store_true", default=False, help="overwrite existing repo config", metavar="FILE")
+	options, args = parser.parse_args(argv);
+	print args
+
+	if len(args) != 2:
+		parser.error("Incorrect number of arguments");
+
+	
+	bucket_name = args[0]
+	repo_path = args[1]
+
+	lsync.repository.create_repository(repo_path, bucket_name, overwrite=options.overwrite)
+
+###################################################################################################
+
+action_dict = {}
+action_dict["init"] = init_action
+action_dict["pull"] = pull_action
+
+# action_dict["rm"] = rm_action
+# action_dict["sync"] = sync_action
+
+# action_dict["push"] = push_action
+# action_dict["upload"] = upload_action
+# action_dict["download"] = download_action
+
+# action_dict["test"] = test_action
+
+def usage():
+	print( "Available actions: ")
+	for action in action_dict:
+		print(" - %s" % action)
+
+def main():
+	if len(sys.argv) < 2:
+		usage()
+		return 1;
+
+	action_str = sys.argv[1]
+	action = action_dict.get(action_str)
+	if action:
+		action(sys.argv[2:])
+	else:
+		usage()
+		return 1
+
+
+	return 0;
+
+if __name__ == "__main__":
+	sys.exit(main())
+
