@@ -59,16 +59,19 @@ def sync_action(argv):
 	"""
 	Sync the local repository with the remote bucket
 	"""
-	usage = "usage: %prog sync [repo_path]" # [path]"
+	usage = "usage: %prog sync" # [path]"
 	parser = OptionParser(usage);
+	parser.add_option("-r", "--repo", dest="repo", default=".", help="Path to repository", metavar="PATH")
 	options, args = parser.parse_args(argv);
 
 	if len(args) not in [0,1]:
 		parser.error("Incorrect number of arguments");
 
-	repo_path = "."
+	sync_path = None
 	if len(args) == 1:
-		repo_path = args[0]
+		sync_path = args[0]
+
+	repo_path = options.repo
 
 	repo = lsync.repository.Repository(repo_path)
 	print "Repository: ", repo.get_root()
@@ -82,16 +85,19 @@ def pull_action(argv):
 	"""
 	Pull all bucket files from the server
 	"""
-	usage = "usage: %prog pull [repo_path]" # [path]"
+	usage = "usage: %prog pull" # [path]"
 	parser = OptionParser(usage);
+	parser.add_option("-r", "--repo", dest="repo", default=".", help="Path to repository", metavar="PATH")
 	options, args = parser.parse_args(argv);
 
 	if len(args) not in [0,1]:
 		parser.error("Incorrect number of arguments");
 
-	repo_path = "."
+	sync_path = None
 	if len(args) == 1:
-		repo_path = args[0]
+		sync_path = args[0]
+
+	repo_path = options.repo
 
 	repo = lsync.repository.Repository(repo_path)
 	print "Repository: ", repo.get_root()
@@ -107,14 +113,17 @@ def push_action(argv):
 	"""
 	usage = "usage: %prog push [repo_path]" # [path]"
 	parser = OptionParser(usage);
+	parser.add_option("-r", "--repo", dest="repo", default=".", help="Path to repository", metavar="PATH")
 	options, args = parser.parse_args(argv);
 
 	if len(args) not in [0,1]:
 		parser.error("Incorrect number of arguments");
 
-	repo_path = "."
+	sync_path = None
 	if len(args) == 1:
-		repo_path = args[0]
+		sync_path = args[0]
+
+	repo_path = options.repo
 
 	repo = lsync.repository.Repository(repo_path)
 	print "Repository: ", repo.get_root()
