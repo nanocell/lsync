@@ -86,7 +86,12 @@ class Bucket:
 		key.set_contents_from_file(f, cb=callback)
 		f.close()
 		print ""
-		return [key.last_modified, key.size, key.etag]
+
+		# Update the key info
+		key = self._bucket.get_key(remote_file)
+		modified_date = utils.parse_iso_date(key.last_modified)
+		
+		return [modified_date, key.size, key.etag]
 
 	###############################################################################################
 

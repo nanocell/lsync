@@ -209,9 +209,9 @@ def push_files(repo_obj, bucket_obj, verbose=False):
 
 		# Upload the current file
 		print "[uploading] [%d KB] %s ..." % (lfile[1]/1024, relname)
-		bucket_obj.upload(full_path, relname)
-		#Register uploaded files immediately with the local repository
-		repo_obj.set_file_properties( f, lfile[0], lfile[1], lfile[2] )
+		rfile = bucket_obj.upload(full_path, relname)
+		#Register uploaded file immediately with the local repository cache
+		repo_obj.set_file_properties(f, rfile[0], rfile[1], rfile[2])
 
 ###################################################################################################
 
