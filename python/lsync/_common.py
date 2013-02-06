@@ -25,7 +25,7 @@ def pull_files(repo_obj, bucket_obj, verbose=False):
 	if verbose:
 		# Find all the files on the remote side, and parse the output from gsutil
 		print "REMOTE FILES:"	
-		for f in remote_files:
+		for f in sorted(remote_files):
 			print f, remote_files[f]
 		print "done."
 
@@ -33,7 +33,7 @@ def pull_files(repo_obj, bucket_obj, verbose=False):
 	local_files = repo_obj.ls()
 	if verbose:
 		print "LOCAL FILES:"	
-		for f in local_files:
+		for f in sorted(local_files):
 			print f, local_files[f]
 		print "done."
 
@@ -91,6 +91,7 @@ def pull_files(repo_obj, bucket_obj, verbose=False):
 	downloaded_files = {}
 	for remote_file in sorted(remote_files):
 		rfile = remote_files[remote_file]
+		cfile = repo_obj.get_file_properties(remote_file)
 		if remote_file in local_files:
 			# Check the time difference between the remote and local file
 			lfile = local_files[remote_file]
@@ -98,10 +99,19 @@ def pull_files(repo_obj, bucket_obj, verbose=False):
 				print "remote file is strictly newer. download file", rfile[0], lfile[0]
 				pass
 			else:
-				print "local file up to date. skipping", remote_file
+				print "local file up to date. skipping '%s'" % remote_file
 				continue;
-		# else:
-			# print "new remote file. download file"
+		elif cfile:
+			# We have this file in the cache, and in the remote, but not locally, which
+			# means this file has been deleted locally. If the remote file timestamp matches the
+			# cached timestamp, don't download
+			if rfile[0] <= cfile[0]:
+				# No updates. Don't download.
+				if verbose: print "No remote updates on missing (local) file. Skipping."
+				print "file has been locally deleted. skipping '%s'" % remote_file
+				continue
+			else:
+				if verbose: print "We have remote updates. Downloading file."
 
 		# Make sure the filename is relative to the root of the repository
 		fname = repo_obj.get_file_in_repository(remote_file)
@@ -212,7 +222,7 @@ def sync_files(repo_obj, bucket_obj, verbose=False):
 	@repo_obj Instance of repository.Repository class
 	@bucket_obj Instance of storage.Bucket class
 	"""
-	pull_files(repo_obj, bucket_obj)
-	push_files(repo_obj, bucket_obj)
+	pull_files(repo_obj, bucket_obj, verbose=verbose)
+	push_files(repo_obj, bucket_obj, verbose=verbose)
 
 ###################################################################################################
