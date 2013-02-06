@@ -61,10 +61,13 @@ def sync_action(argv):
 	"""
 	usage = "usage: %prog sync" # [path]"
 	parser = OptionParser(usage);
-	parser.add_option("-r", "--repo", dest="repo", default=".", help="Path to repository", metavar="PATH")
+	parser.add_option("-r", "--repo", dest="repo", default=".", help="Path to repository", \
+		metavar="PATH")
+	parser.add_option("-v", "--verbose", dest="verbose", default=False, help="Verbose output", \
+		action="store_true")
 	options, args = parser.parse_args(argv);
 
-	if len(args) not in [0,1]:
+	if len(args) not in [0]:
 		parser.error("Incorrect number of arguments");
 
 	sync_path = None
@@ -77,7 +80,7 @@ def sync_action(argv):
 	print "Repository: ", repo.get_root()
 	bucket = lsync.storage.Bucket( repo.get_bucket_name() )
 	
-	lsync.sync_files(repo, bucket)
+	lsync.sync_files(repo, bucket, verbose=options.verbose)
 
 ###################################################################################################
 
@@ -87,10 +90,13 @@ def pull_action(argv):
 	"""
 	usage = "usage: %prog pull" # [path]"
 	parser = OptionParser(usage);
-	parser.add_option("-r", "--repo", dest="repo", default=".", help="Path to repository", metavar="PATH")
+	parser.add_option("-r", "--repo", dest="repo", default=".", help="Path to repository", \
+		metavar="PATH")
+	parser.add_option("-v", "--verbose", dest="verbose", default=False, help="Verbose output", \
+		action="store_true")
 	options, args = parser.parse_args(argv);
 
-	if len(args) not in [0,1]:
+	if len(args) not in [0]:
 		parser.error("Incorrect number of arguments");
 
 	sync_path = None
@@ -103,7 +109,7 @@ def pull_action(argv):
 	print "Repository: ", repo.get_root()
 	bucket = lsync.storage.Bucket( repo.get_bucket_name() )
 	
-	lsync.pull_files(repo, bucket)
+	lsync.pull_files(repo, bucket, verbose=options.verbose)
 
 ###################################################################################################
 
@@ -113,10 +119,13 @@ def push_action(argv):
 	"""
 	usage = "usage: %prog push [repo_path]" # [path]"
 	parser = OptionParser(usage);
-	parser.add_option("-r", "--repo", dest="repo", default=".", help="Path to repository", metavar="PATH")
+	parser.add_option("-r", "--repo", dest="repo", default=".", help="Path to repository", \
+		metavar="PATH")
+	parser.add_option("-v", "--verbose", dest="verbose", default=False, help="Verbose output", \
+		action="store_true")
 	options, args = parser.parse_args(argv);
 
-	if len(args) not in [0,1]:
+	if len(args) not in [0]:
 		parser.error("Incorrect number of arguments");
 
 	sync_path = None
@@ -130,7 +139,7 @@ def push_action(argv):
 	bucket = lsync.storage.Bucket( repo.get_bucket_name() )
 	
 	# _pull_files(gs, bcache)
-	lsync.push_files(repo, bucket)
+	lsync.push_files(repo, bucket, verbose=options.verbose)
 
 ###################################################################################################
 
