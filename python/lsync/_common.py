@@ -71,10 +71,18 @@ def pull_files(repo_obj, bucket_obj, verbose=False):
 					print "Appending file for deletion: ", f
 				remotely_deleted_files.append(f)
 		elif cfile is None and f in remote_files and f in local_files:
-			# We have a local file with the same name as a remote file, but wasn't 
-			# recorded as being downloaded with lsync. Generate conflict here
-			raise NotImplementedError("Conflict between local and remote file: %s" % (f))
-
+			local_path = os.path.join(repo_obj.get_root(), f)
+			rfile = remote_files[f]
+			local_time, local_size, _ = lfile
+			remote_time, remote_size, _ = rfile		
+			if local_time == remote_time and local_size == remote_size:
+				# register the file since it the local copy matches the server.
+				print "local matches remote. registering file: %s" % (f)
+				repo_obj.set_file_properties(f, rfile[0], rfile[1], rfile[2])
+			else:
+				# We have a local file with the same name as a remote file, but wasn't 
+				# recorded as being downloaded with lsync. Generate conflict here
+				raise NotImplementedError("Conflict between local and remote file: %s" % (f))
 
 	# Delete remotely-removed files, and remove them from the cache
 	for f in remotely_deleted_files:
