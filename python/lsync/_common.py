@@ -82,6 +82,8 @@ def pull_files(repo_obj, bucket_obj, verbose=False):
 			else:
 				# We have a local file with the same name as a remote file, but wasn't 
 				# recorded as being downloaded with lsync. Generate conflict here
+				print "local / remote time: ", local_time, remote_time
+				print "local / remote size: ", local_size, remote_size
 				raise NotImplementedError("Conflict between local and remote file: %s" % (f))
 
 	# Delete remotely-removed files, and remove them from the cache
